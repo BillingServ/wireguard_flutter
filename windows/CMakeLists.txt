@@ -22,10 +22,8 @@ set(PLUGIN_NAME "wireguard_flutter_plugin")
 list(APPEND PLUGIN_SOURCES
   "wireguard_flutter_plugin.cpp"
   "wireguard_flutter_plugin.h"
-  "config_writer.cpp"
-  "config_writer.h"
-  "service_control.cpp"
-  "service_control.h"
+  "wireguard_tunnel_manager.cpp"
+  "wireguard_tunnel_manager.h"
   "utils.cpp"
   "utils.h"
 )
@@ -78,7 +76,7 @@ target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/tunnel/include"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/wireguard/include"
 )
-target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin)
+target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin iphlpapi ws2_32)
 
 # List of absolute paths to libraries that should be bundled with the plugin.
 # This list could contain prebuilt libraries, or libraries created by an
@@ -86,7 +84,6 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin)
 set(wireguard_flutter_bundled_libraries
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/wireguard/amd64/wireguard.dll"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/tunnel/amd64/tunnel.dll"
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/wireguard_svc/amd64/wireguard_svc.exe"
   PARENT_SCOPE
 )
 

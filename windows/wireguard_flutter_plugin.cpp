@@ -14,8 +14,7 @@
 #include <memory>
 #include <sstream>
 
-#include "config_writer.h"
-#include "service_control.h"
+#include "wireguard_tunnel_manager.h"
 #include "utils.h"
 
 using namespace flutter;
@@ -56,7 +55,11 @@ namespace wireguard_flutter
     registrar->AddPlugin(move(plugin));
   }
 
-  WireguardFlutterPlugin::WireguardFlutterPlugin() {}
+  WireguardFlutterPlugin::WireguardFlutterPlugin() {
+    // Create tunnel manager
+    tunnel_manager_ = make_unique<WireGuardTunnelManager>();
+    cout << "WireguardFlutterPlugin: Created with embedded tunnel manager" << endl;
+  }
 
   WireguardFlutterPlugin::~WireguardFlutterPlugin() {}
 
@@ -67,33 +70,25 @@ namespace wireguard_flutter
 
     if (call.method_name() == "initialize")
     {
-      const auto *arg_service_name = get_if<string>(ValueOrNull(*args, "win32ServiceName"));
-      if (arg_service_name == NULL)
-      {
-        result->Error("Argument 'win32ServiceName' is required");
-        return;
+      // For the embedded approach, we don't need win32ServiceName
+      // Just acknowledge initialization
+      cout << "WireguardFlutterPlugin: Initialize called (embedded mode)" << endl;
+      
+      if (tunnel_manager_ && events_) {
+        tunnel_manager_->setEventSink(events_.get());
       }
-      if (this->tunnel_service_ != nullptr)
-      {
-        this->tunnel_service_->service_name_ = Utf8ToWide(*arg_service_name);
-      }
-      else
-      {
-        this->tunnel_service_ = make_unique<ServiceControl>(Utf8ToWide(*arg_service_name));
-        this->tunnel_service_->RegisterListener(move(events_));
-      }
-
+      
       result->Success();
       return;
     }
     else if (call.method_name() == "start")
     {
-      auto tunnel_service = this->tunnel_service_.get();
-      if (tunnel_service == nullptr)
+      if (tunnel_manager_ == nullptr)
       {
-        result->Error("Invalid state: call 'initialize' first");
+        result->Error("Invalid state: tunnel manager not initialized");
         return;
       }
+      
       const auto *wgQuickConfig = get_if<string>(ValueOrNull(*args, "wgQuickConfig"));
       if (wgQuickConfig == NULL)
       {
@@ -101,79 +96,54 @@ namespace wireguard_flutter
         return;
       }
 
-      this->tunnel_service_->EmitState("prepare");
-
-      wstring wg_config_filename;
+      cout << "WireguardFlutterPlugin: Starting tunnel with embedded approach" << endl;
+      
       try
       {
-        wg_config_filename = WriteConfigToTempFile(*wgQuickConfig);
+        bool success = tunnel_manager_->startTunnel(*wgQuickConfig);
+        if (success) {
+          result->Success();
+        } else {
+          result->Error("Failed to start tunnel");
+        }
       }
       catch (exception &e)
       {
-        this->tunnel_service_->EmitState("no_connection");
-        result->Error(string("Could not write wireguard config: ").append(e.what()));
-        return;
+        result->Error(string("Tunnel start error: ").append(e.what()));
       }
-
-      wchar_t module_filename[MAX_PATH];
-      GetModuleFileName(NULL, module_filename, MAX_PATH);
-      auto current_exec_dir = wstring(module_filename);
-      current_exec_dir = current_exec_dir.substr(0, current_exec_dir.find_last_of(L"\\/"));
-      wostringstream service_exec_builder;
-      service_exec_builder << current_exec_dir << "\\wireguard_svc.exe" << L" -service"
-                           << L" -config-file=\"" << wg_config_filename << "\"";
-      wstring service_exec = service_exec_builder.str();
-      cout << "Starting service with command line: " << WideToAnsi(service_exec) << endl;
-      try
-      {
-        CreateArgs csa;
-        csa.description = tunnel_service->service_name_ + L" WireGuard tunnel";
-        csa.executable_and_args = service_exec;
-        csa.dependencies = L"Nsi\0TcpIp\0";
-        csa.first_time = true;
-
-        tunnel_service->CreateAndStart(csa);
-      }
-      catch (exception &e)
-      {
-        result->Error(string(e.what()));
-        return;
-      }
-
-      result->Success();
       return;
     }
     else if (call.method_name() == "stop")
     {
-      auto tunnel_service = this->tunnel_service_.get();
-      if (tunnel_service == nullptr)
+      if (tunnel_manager_ == nullptr)
       {
-        result->Error("Invalid state: call 'initialize' first");
+        result->Error("Invalid state: tunnel manager not initialized");
         return;
       }
 
+      cout << "WireguardFlutterPlugin: Stopping tunnel" << endl;
+      
       try
       {
-        tunnel_service->Stop();
+        tunnel_manager_->stopTunnel();
+        result->Success();
       }
       catch (exception &e)
       {
         result->Error(string(e.what()));
       }
-
-      result->Success();
       return;
     }
     else if (call.method_name() == "stage")
     {
-      auto tunnel_service = this->tunnel_service_.get();
-      if (tunnel_service == nullptr)
+      if (tunnel_manager_ == nullptr)
       {
-        result->Error("Invalid state: call 'initialize' first");
+        result->Error("Invalid state: tunnel manager not initialized");
         return;
       }
 
-      result->Success(tunnel_service->GetStatus());
+      string status = tunnel_manager_->getStatus();
+      result->Success(status);
       return;
     }
 
@@ -185,13 +155,10 @@ namespace wireguard_flutter
       unique_ptr<EventSink<EncodableValue>> &&events)
   {
     events_ = move(events);
-    auto tunnel_service = this->tunnel_service_.get();
-    if (tunnel_service != nullptr)
+    if (tunnel_manager_ != nullptr)
     {
-      tunnel_service->RegisterListener(move(events_));
-      return nullptr;
+      tunnel_manager_->setEventSink(events_.get());
     }
-
     return nullptr;
   }
 
@@ -199,13 +166,10 @@ namespace wireguard_flutter
       const EncodableValue *arguments)
   {
     events_ = nullptr;
-    auto tunnel_service = this->tunnel_service_.get();
-    if (tunnel_service != nullptr)
+    if (tunnel_manager_ != nullptr)
     {
-      tunnel_service->UnregisterListener();
-      return nullptr;
+      tunnel_manager_->setEventSink(nullptr);
     }
-
     return nullptr;
   }
 

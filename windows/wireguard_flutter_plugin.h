@@ -11,7 +11,7 @@
 
 #include <memory>
 
-#include "service_control.h"
+#include "wireguard_tunnel_manager.h"
 
 namespace wireguard_flutter
 {
@@ -34,7 +34,7 @@ namespace wireguard_flutter
     void HandleMethodCall(const flutter::MethodCall<flutter::EncodableValue> &method_call,
                           std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
 
-    std::unique_ptr<ServiceControl> tunnel_service_;
+    std::unique_ptr<WireGuardTunnelManager> tunnel_manager_;
     std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> events_;
 
     std::unique_ptr<flutter::StreamHandlerError<flutter::EncodableValue>> OnListen(
