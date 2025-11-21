@@ -44,8 +44,7 @@ bool WireGuardTunnelManager::loadTunnelDll() {
     
     if (!tunnelDll) {
         DWORD error = GetLastError();
-        std::cerr << "WireGuardTunnelManager: Failed to load tunnel.dll from "
-                  << std::string(dllPath.begin(), dllPath.end()) << std::endl;
+        std::cerr << "WireGuardTunnelManager: Failed to load tunnel.dll" << std::endl;
         std::cerr << "Error code: " << error << std::endl;
         return false;
     }
