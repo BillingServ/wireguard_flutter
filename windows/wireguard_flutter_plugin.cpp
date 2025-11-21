@@ -161,6 +161,8 @@ namespace wireguard_flutter
         EncodableMap statsMap;
         statsMap[EncodableValue("byte_in")] = EncodableValue(static_cast<int64_t>(stats["byte_in"]));
         statsMap[EncodableValue("byte_out")] = EncodableValue(static_cast<int64_t>(stats["byte_out"]));
+        statsMap[EncodableValue("speed_in_bps")] = EncodableValue(static_cast<int64_t>(stats["speed_in_bps"]));
+        statsMap[EncodableValue("speed_out_bps")] = EncodableValue(static_cast<int64_t>(stats["speed_out_bps"]));
         
         result->Success(EncodableValue(statsMap));
       }

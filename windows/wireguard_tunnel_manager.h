@@ -42,6 +42,13 @@ private:
     
     // WireGuard interface name for stats
     std::wstring wireguardInterfaceName;
+    
+    // Speed tracking and smoothing
+    uint64_t lastBytesIn = 0;
+    uint64_t lastBytesOut = 0;
+    std::chrono::system_clock::time_point lastStatsTime;
+    double smoothedSpeedIn = 0.0;  // smoothed speed for download
+    double smoothedSpeedOut = 0.0; // smoothed speed for upload
 
 public:
     WireGuardTunnelManager();

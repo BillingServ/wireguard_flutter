@@ -271,6 +271,8 @@ std::map<std::string, uint64_t> WireGuardTunnelManager::getWireGuardInterfaceSta
     std::map<std::string, uint64_t> stats;
     stats["byte_in"] = 0;
     stats["byte_out"] = 0;
+    stats["speed_in_bps"] = 0;
+    stats["speed_out_bps"] = 0;
     
     ULONG bufferSize = 15000;
     PIP_ADAPTER_ADDRESSES addresses = (IP_ADAPTER_ADDRESSES*)malloc(bufferSize);
@@ -304,12 +306,53 @@ std::map<std::string, uint64_t> WireGuardTunnelManager::getWireGuardInterfaceSta
                 ifRow.InterfaceLuid = currentAddress->Luid;
                 
                 if (GetIfEntry2(&ifRow) == NO_ERROR) {
-                    stats["byte_in"] = ifRow.InOctets;
-                    stats["byte_out"] = ifRow.OutOctets;
+                    uint64_t currentBytesIn = ifRow.InOctets;
+                    uint64_t currentBytesOut = ifRow.OutOctets;
                     
-                    std::wcout << L"WireGuard Stats (" << friendlyName << L"): " 
-                              << L"Download=" << stats["byte_in"] << L" bytes, "
-                              << L"Upload=" << stats["byte_out"] << L" bytes" << std::endl;
+                    stats["byte_in"] = currentBytesIn;
+                    stats["byte_out"] = currentBytesOut;
+                    
+                    // Calculate speeds with exponential moving average smoothing
+                    auto now = std::chrono::system_clock::now();
+                    
+                    // Initialize on first call
+                    if (lastStatsTime.time_since_epoch().count() == 0) {
+                        lastBytesIn = currentBytesIn;
+                        lastBytesOut = currentBytesOut;
+                        lastStatsTime = now;
+                        smoothedSpeedIn = 0.0;
+                        smoothedSpeedOut = 0.0;
+                        stats["speed_in_bps"] = 0;
+                        stats["speed_out_bps"] = 0;
+                    } else {
+                        // Calculate time difference
+                        auto timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastStatsTime);
+                        double timeDiffSeconds = timeDiff.count() / 1000.0;
+                        
+                        // Only calculate if we have at least 100ms elapsed
+                        if (timeDiffSeconds >= 0.1) {
+                            // Calculate byte differences
+                            uint64_t byteInDiff = (currentBytesIn > lastBytesIn) ? (currentBytesIn - lastBytesIn) : 0;
+                            uint64_t byteOutDiff = (currentBytesOut > lastBytesOut) ? (currentBytesOut - lastBytesOut) : 0;
+                            
+                            // Calculate raw speeds (bytes per second)
+                            double rawSpeedIn = byteInDiff / timeDiffSeconds;
+                            double rawSpeedOut = byteOutDiff / timeDiffSeconds;
+                            
+                            // Smooth the speeds with exponential moving average to reduce jitter
+                            // Weight: 70% new value, 30% old value for responsive but stable speeds
+                            smoothedSpeedIn = (smoothedSpeedIn * 0.3) + (rawSpeedIn * 0.7);
+                            smoothedSpeedOut = (smoothedSpeedOut * 0.3) + (rawSpeedOut * 0.7);
+                            
+                            stats["speed_in_bps"] = static_cast<uint64_t>(smoothedSpeedIn);
+                            stats["speed_out_bps"] = static_cast<uint64_t>(smoothedSpeedOut);
+                            
+                            // Update tracking variables
+                            lastBytesIn = currentBytesIn;
+                            lastBytesOut = currentBytesOut;
+                            lastStatsTime = now;
+                        }
+                    }
                 }
                 break;
             }
@@ -324,7 +367,13 @@ std::map<std::string, uint64_t> WireGuardTunnelManager::getWireGuardInterfaceSta
 
 std::map<std::string, uint64_t> WireGuardTunnelManager::getStatistics() {
     if (!isConnected) {
-        return {{"byte_in", 0}, {"byte_out", 0}};
+        // Reset smoothing on disconnect
+        lastBytesIn = 0;
+        lastBytesOut = 0;
+        lastStatsTime = std::chrono::system_clock::time_point{};
+        smoothedSpeedIn = 0.0;
+        smoothedSpeedOut = 0.0;
+        return {{"byte_in", 0}, {"byte_out", 0}, {"speed_in_bps", 0}, {"speed_out_bps", 0}};
     }
     
     return getWireGuardInterfaceStatistics();
@@ -394,9 +443,16 @@ bool WireGuardTunnelManager::startTunnel(const std::string& config) {
         return false;
     }
     
-    // Reset flags
+    // Reset flags and statistics
     isConnecting = true;
     connectionStartTime = std::chrono::system_clock::now();
+    
+    // Reset speed tracking for new connection
+    lastBytesIn = 0;
+    lastBytesOut = 0;
+    lastStatsTime = std::chrono::system_clock::time_point{};
+    smoothedSpeedIn = 0.0;
+    smoothedSpeedOut = 0.0;
     
     updateStatus("connecting");
     
