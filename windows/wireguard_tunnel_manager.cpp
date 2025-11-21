@@ -249,6 +249,9 @@ bool WireGuardTunnelManager::checkConnectionStatus() {
             if (description.find(L"WireGuard") != std::wstring::npos ||
                 friendlyName.find(L"WireGuard") != std::wstring::npos) {
                 
+                // Store the interface name for statistics
+                wireguardInterfaceName = friendlyName;
+                
                 // Check if adapter is up
                 if (currentAddress->OperStatus == IfOperStatusUp) {
                     connected = true;
@@ -262,6 +265,69 @@ bool WireGuardTunnelManager::checkConnectionStatus() {
     
     free(addresses);
     return connected;
+}
+
+std::map<std::string, uint64_t> WireGuardTunnelManager::getWireGuardInterfaceStatistics() {
+    std::map<std::string, uint64_t> stats;
+    stats["byte_in"] = 0;
+    stats["byte_out"] = 0;
+    
+    ULONG bufferSize = 15000;
+    PIP_ADAPTER_ADDRESSES addresses = (IP_ADAPTER_ADDRESSES*)malloc(bufferSize);
+    
+    if (!addresses) {
+        return stats;
+    }
+    
+    ULONG result = GetAdaptersAddresses(
+        AF_UNSPEC,
+        GAA_FLAG_INCLUDE_PREFIX | GAA_FLAG_INCLUDE_GATEWAYS,
+        NULL,
+        addresses,
+        &bufferSize
+    );
+    
+    if (result == NO_ERROR) {
+        PIP_ADAPTER_ADDRESSES currentAddress = addresses;
+        
+        while (currentAddress) {
+            std::wstring description(currentAddress->Description);
+            std::wstring friendlyName(currentAddress->FriendlyName);
+            
+            // Check if this is a WireGuard adapter
+            if (description.find(L"WireGuard") != std::wstring::npos ||
+                friendlyName.find(L"WireGuard") != std::wstring::npos) {
+                
+                // Get statistics from MIB_IF_ROW2
+                MIB_IF_ROW2 ifRow;
+                ZeroMemory(&ifRow, sizeof(ifRow));
+                ifRow.InterfaceLuid = currentAddress->Luid;
+                
+                if (GetIfEntry2(&ifRow) == NO_ERROR) {
+                    stats["byte_in"] = ifRow.InOctets;
+                    stats["byte_out"] = ifRow.OutOctets;
+                    
+                    std::wcout << L"WireGuard Stats (" << friendlyName << L"): " 
+                              << L"Download=" << stats["byte_in"] << L" bytes, "
+                              << L"Upload=" << stats["byte_out"] << L" bytes" << std::endl;
+                }
+                break;
+            }
+            
+            currentAddress = currentAddress->Next;
+        }
+    }
+    
+    free(addresses);
+    return stats;
+}
+
+std::map<std::string, uint64_t> WireGuardTunnelManager::getStatistics() {
+    if (!isConnected) {
+        return {{"byte_in", 0}, {"byte_out", 0}};
+    }
+    
+    return getWireGuardInterfaceStatistics();
 }
 
 void WireGuardTunnelManager::monitorConnection() {

@@ -146,6 +146,30 @@ namespace wireguard_flutter
       result->Success(status);
       return;
     }
+    else if (call.method_name() == "getWireGuardStatistics")
+    {
+      if (tunnel_manager_ == nullptr)
+      {
+        result->Error("Invalid state: tunnel manager not initialized");
+        return;
+      }
+
+      try
+      {
+        auto stats = tunnel_manager_->getStatistics();
+        
+        EncodableMap statsMap;
+        statsMap[EncodableValue("byte_in")] = EncodableValue(static_cast<int64_t>(stats["byte_in"]));
+        statsMap[EncodableValue("byte_out")] = EncodableValue(static_cast<int64_t>(stats["byte_out"]));
+        
+        result->Success(EncodableValue(statsMap));
+      }
+      catch (exception &e)
+      {
+        result->Error(string("Statistics error: ").append(e.what()));
+      }
+      return;
+    }
 
     result->NotImplemented();
   }

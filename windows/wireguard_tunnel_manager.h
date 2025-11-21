@@ -8,6 +8,7 @@
 #include <mutex>
 #include <queue>
 #include <chrono>
+#include <map>
 #include <flutter/event_channel.h>
 #include <flutter/encodable_value.h>
 
@@ -38,6 +39,9 @@ private:
     
     // Connection tracking
     std::chrono::system_clock::time_point connectionStartTime;
+    
+    // WireGuard interface name for stats
+    std::wstring wireguardInterfaceName;
 
 public:
     WireGuardTunnelManager();
@@ -47,6 +51,7 @@ public:
     bool startTunnel(const std::string& config);
     void stopTunnel();
     std::string getStatus();
+    std::map<std::string, uint64_t> getStatistics();
     
     // Process pending status updates (call from main thread)
     void processPendingStatusUpdates();
@@ -64,6 +69,7 @@ private:
     bool checkConnectionStatus();
     std::wstring getAppDirectory();
     std::wstring getAppExecutablePath();
+    std::map<std::string, uint64_t> getWireGuardInterfaceStatistics();
 };
 
 } // namespace wireguard_flutter
