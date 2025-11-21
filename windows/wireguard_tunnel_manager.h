@@ -15,10 +15,9 @@ namespace wireguard_flutter {
 
 class WireGuardTunnelManager {
 private:
-    // Tunnel thread (WireGuard tunnel runs in a dedicated thread)
-    std::thread tunnelThread;
-    std::atomic<bool> tunnelRunning{false};
-    std::atomic<bool> shouldStopTunnel{false};
+    // Service handle
+    SC_HANDLE serviceHandle = nullptr;
+    std::wstring serviceName;
     
     // Connection state
     std::atomic<bool> isConnected{false};
@@ -39,11 +38,6 @@ private:
     
     // Connection tracking
     std::chrono::system_clock::time_point connectionStartTime;
-    
-    // tunnel.dll handle and function
-    HMODULE tunnelDll = nullptr;
-    typedef unsigned char (*WireGuardTunnelServiceFunc)(unsigned short* confFile16);
-    WireGuardTunnelServiceFunc pWireGuardTunnelService = nullptr;
 
 public:
     WireGuardTunnelManager();
@@ -58,9 +52,10 @@ public:
     void processPendingStatusUpdates();
     
 private:
-    bool loadTunnelDll();
-    void unloadTunnelDll();
-    void runTunnelService();
+    bool installService();
+    bool startService();
+    bool stopService();
+    bool deleteService();
     void monitorConnection();
     void updateStatus(const std::string& status);
     void updateStatusThreadSafe(const std::string& status);
@@ -68,6 +63,7 @@ private:
     void cleanupTempFiles();
     bool checkConnectionStatus();
     std::wstring getAppDirectory();
+    std::wstring getAppExecutablePath();
 };
 
 } // namespace wireguard_flutter

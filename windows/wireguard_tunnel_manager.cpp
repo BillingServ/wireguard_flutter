@@ -14,59 +14,21 @@
 
 #pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "advapi32.lib")
 
 namespace wireguard_flutter {
 
 WireGuardTunnelManager::WireGuardTunnelManager() {
     std::cout << "WireGuardTunnelManager: Initializing..." << std::endl;
-    if (!loadTunnelDll()) {
-        std::cerr << "WireGuardTunnelManager: Failed to load tunnel.dll" << std::endl;
-    }
 }
 
 WireGuardTunnelManager::~WireGuardTunnelManager() {
     std::cout << "WireGuardTunnelManager: Cleaning up..." << std::endl;
     stopTunnel();
-    unloadTunnelDll();
 }
 
 void WireGuardTunnelManager::setEventSink(flutter::EventSink<flutter::EncodableValue>* sink) {
     eventSink = sink;
-}
-
-bool WireGuardTunnelManager::loadTunnelDll() {
-    std::cout << "WireGuardTunnelManager: Loading tunnel.dll..." << std::endl;
-    
-    // Get the application directory
-    std::wstring dllPath = getAppDirectory() + L"\\tunnel.dll";
-    tunnelDll = LoadLibraryW(dllPath.c_str());
-    
-    if (!tunnelDll) {
-        DWORD error = GetLastError();
-        std::cerr << "WireGuardTunnelManager: Failed to load tunnel.dll" << std::endl;
-        std::cerr << "Error code: " << error << std::endl;
-        return false;
-    }
-    
-    // Load WireGuardTunnelService function
-    pWireGuardTunnelService = (WireGuardTunnelServiceFunc)GetProcAddress(tunnelDll, "WireGuardTunnelService");
-    
-    if (!pWireGuardTunnelService) {
-        std::cerr << "WireGuardTunnelManager: Failed to load WireGuardTunnelService function" << std::endl;
-        unloadTunnelDll();
-        return false;
-    }
-    
-    std::cout << "WireGuardTunnelManager: Successfully loaded tunnel.dll" << std::endl;
-    return true;
-}
-
-void WireGuardTunnelManager::unloadTunnelDll() {
-    if (tunnelDll) {
-        FreeLibrary(tunnelDll);
-        tunnelDll = nullptr;
-        pWireGuardTunnelService = nullptr;
-    }
 }
 
 std::wstring WireGuardTunnelManager::getAppDirectory() {
@@ -74,6 +36,12 @@ std::wstring WireGuardTunnelManager::getAppDirectory() {
     GetModuleFileNameW(NULL, exePath, MAX_PATH);
     std::wstring path(exePath);
     return path.substr(0, path.find_last_of(L"\\/"));
+}
+
+std::wstring WireGuardTunnelManager::getAppExecutablePath() {
+    wchar_t exePath[MAX_PATH];
+    GetModuleFileNameW(NULL, exePath, MAX_PATH);
+    return std::wstring(exePath);
 }
 
 bool WireGuardTunnelManager::createConfigFile(const std::string& config) {
@@ -119,53 +87,140 @@ void WireGuardTunnelManager::cleanupTempFiles() {
     }
 }
 
-void WireGuardTunnelManager::runTunnelService() {
-    std::wcout << L"WireGuardTunnelManager: Starting tunnel service thread..." << std::endl;
+bool WireGuardTunnelManager::installService() {
+    std::cout << "WireGuardTunnelManager: Installing Windows Service..." << std::endl;
     
-    if (!pWireGuardTunnelService) {
-        std::cerr << "WireGuardTunnelService function not loaded" << std::endl;
-        updateStatusThreadSafe("error");
-        return;
+    // Generate unique service name based on timestamp
+    auto now = std::chrono::system_clock::now();
+    auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    std::wostringstream serviceNameStream;
+    serviceNameStream << L"WireGuardTunnel$FlutterVPN_" << timestamp;
+    serviceName = serviceNameStream.str();
+    
+    // Open Service Control Manager
+    SC_HANDLE scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_ALL_ACCESS);
+    if (!scm) {
+        std::cerr << "Failed to open Service Control Manager. Error: " << GetLastError() << std::endl;
+        std::cerr << "Ensure application is running as Administrator" << std::endl;
+        return false;
     }
     
-    tunnelRunning = true;
+    // Build command line: "C:\path\to\app.exe" /service "C:\path\to\config.conf"
+    std::wstring exePath = getAppExecutablePath();
+    std::wostringstream cmdStream;
+    cmdStream << L"\"" << exePath << L"\" /service \"" << currentConfigPath << L"\"";
+    std::wstring cmdLine = cmdStream.str();
     
-    // Call WireGuardTunnelService with the config file path
-    // This function blocks until the tunnel stops
-    try {
-        std::wcout << L"Calling WireGuardTunnelService with config: " << currentConfigPath << std::endl;
-        
-        // Convert wstring to unsigned short array for the Go function
-        std::vector<unsigned short> configPathUtf16(currentConfigPath.begin(), currentConfigPath.end());
-        configPathUtf16.push_back(0); // Null terminator
-        
-        unsigned char result = pWireGuardTunnelService(configPathUtf16.data());
-        
-        std::cout << "WireGuardTunnelService returned: " << (int)result << std::endl;
-        
-        if (result == 0) {
-            std::cout << "Tunnel service completed successfully" << std::endl;
-        } else {
-            std::cerr << "Tunnel service returned error code: " << (int)result << std::endl;
+    std::wcout << L"Service command: " << cmdLine << std::endl;
+    
+    // Create the service
+    serviceHandle = CreateServiceW(
+        scm,                                    // SCM database
+        serviceName.c_str(),                    // Name of service
+        L"WireGuard Flutter VPN Tunnel",       // Display name
+        SERVICE_ALL_ACCESS,                     // Desired access
+        SERVICE_WIN32_OWN_PROCESS,             // Service type
+        SERVICE_DEMAND_START,                   // Start type
+        SERVICE_ERROR_NORMAL,                   // Error control type
+        cmdLine.c_str(),                        // Path to service's binary
+        NULL,                                   // No load ordering group
+        NULL,                                   // No tag identifier
+        L"Nsi\0TcpIp\0",                       // Dependencies
+        NULL,                                   // LocalSystem account
+        NULL                                    // No password
+    );
+    
+    if (!serviceHandle) {
+        DWORD error = GetLastError();
+        std::cerr << "Failed to create service. Error: " << error << std::endl;
+        CloseServiceHandle(scm);
+        return false;
+    }
+    
+    // Set service SID type to UNRESTRICTED (CRITICAL for WireGuard)
+    SERVICE_SID_INFO sidInfo;
+    sidInfo.dwServiceSidType = SERVICE_SID_TYPE_UNRESTRICTED;
+    
+    if (!ChangeServiceConfig2W(serviceHandle, SERVICE_CONFIG_SERVICE_SID_INFO, &sidInfo)) {
+        std::cerr << "Warning: Failed to set service SID type. Error: " << GetLastError() << std::endl;
+    }
+    
+    CloseServiceHandle(scm);
+    std::cout << "Service installed successfully" << std::endl;
+    return true;
+}
+
+bool WireGuardTunnelManager::startService() {
+    std::cout << "WireGuardTunnelManager: Starting service..." << std::endl;
+    
+    if (!serviceHandle) {
+        std::cerr << "Service handle is NULL" << std::endl;
+        return false;
+    }
+    
+    if (!StartServiceW(serviceHandle, 0, NULL)) {
+        DWORD error = GetLastError();
+        if (error != ERROR_SERVICE_ALREADY_RUNNING) {
+            std::cerr << "Failed to start service. Error: " << error << std::endl;
+            return false;
         }
     }
-    catch (const std::exception& e) {
-        std::cerr << "Exception in tunnel service: " << e.what() << std::endl;
+    
+    std::cout << "Service started successfully" << std::endl;
+    return true;
+}
+
+bool WireGuardTunnelManager::stopService() {
+    std::cout << "WireGuardTunnelManager: Stopping service..." << std::endl;
+    
+    if (!serviceHandle) {
+        return true;
     }
     
-    tunnelRunning = false;
-    
-    if (!shouldStopTunnel) {
-        // Tunnel stopped unexpectedly
-        std::cout << "Tunnel stopped unexpectedly" << std::endl;
-        updateStatusThreadSafe("disconnected");
+    SERVICE_STATUS status;
+    if (!ControlService(serviceHandle, SERVICE_CONTROL_STOP, &status)) {
+        DWORD error = GetLastError();
+        if (error != ERROR_SERVICE_NOT_ACTIVE) {
+            std::cerr << "Failed to stop service. Error: " << error << std::endl;
+        }
     }
+    
+    // Wait for service to stop
+    for (int i = 0; i < 30; i++) {
+        if (QueryServiceStatus(serviceHandle, &status)) {
+            if (status.dwCurrentState == SERVICE_STOPPED) {
+                std::cout << "Service stopped successfully" << std::endl;
+                return true;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    
+    std::cout << "Service stop timeout" << std::endl;
+    return false;
+}
+
+bool WireGuardTunnelManager::deleteService() {
+    std::cout << "WireGuardTunnelManager: Deleting service..." << std::endl;
+    
+    if (!serviceHandle) {
+        return true;
+    }
+    
+    if (!DeleteService(serviceHandle)) {
+        DWORD error = GetLastError();
+        std::cerr << "Failed to delete service. Error: " << error << std::endl;
+    }
+    
+    CloseServiceHandle(serviceHandle);
+    serviceHandle = nullptr;
+    
+    std::cout << "Service deleted successfully" << std::endl;
+    return true;
 }
 
 bool WireGuardTunnelManager::checkConnectionStatus() {
     // Check if WireGuard adapter exists and is up
-    // We can check this by looking for network interfaces with "WireGuard" in the name
-    
     ULONG bufferSize = 15000;
     PIP_ADAPTER_ADDRESSES addresses = (IP_ADAPTER_ADDRESSES*)malloc(bufferSize);
     
@@ -196,7 +251,6 @@ bool WireGuardTunnelManager::checkConnectionStatus() {
                 
                 // Check if adapter is up
                 if (currentAddress->OperStatus == IfOperStatusUp) {
-                    std::wcout << L"Found active WireGuard adapter: " << friendlyName << std::endl;
                     connected = true;
                     break;
                 }
@@ -216,14 +270,7 @@ void WireGuardTunnelManager::monitorConnection() {
     int connectionCheckAttempts = 0;
     const int maxConnectionCheckAttempts = 30; // 30 seconds
     
-    while (shouldMonitor && tunnelRunning) {
-        // Check if the tunnel thread is still running
-        if (!tunnelRunning) {
-            std::cout << "Tunnel thread stopped" << std::endl;
-            updateStatusThreadSafe("disconnected");
-            break;
-        }
-        
+    while (shouldMonitor) {
         // Check for actual connection
         if (isConnecting && checkConnectionStatus()) {
             std::cout << "WireGuard connection established!" << std::endl;
@@ -235,7 +282,6 @@ void WireGuardTunnelManager::monitorConnection() {
             if (connectionCheckAttempts >= maxConnectionCheckAttempts) {
                 std::cerr << "Connection timeout - adapter not coming up" << std::endl;
                 updateStatusThreadSafe("error");
-                shouldStopTunnel = true;
                 break;
             }
         }
@@ -245,6 +291,7 @@ void WireGuardTunnelManager::monitorConnection() {
             std::cout << "WireGuard connection lost" << std::endl;
             isConnected = false;
             updateStatusThreadSafe("disconnected");
+            break;
         }
         
         std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -256,13 +303,8 @@ void WireGuardTunnelManager::monitorConnection() {
 bool WireGuardTunnelManager::startTunnel(const std::string& config) {
     std::lock_guard<std::mutex> lock(statusMutex);
     
-    if (isConnected || isConnecting || tunnelRunning) {
+    if (isConnected || isConnecting) {
         std::cerr << "WireGuardTunnelManager: Already connected or connecting" << std::endl;
-        return false;
-    }
-    
-    if (!tunnelDll) {
-        std::cerr << "WireGuardTunnelManager: tunnel.dll not loaded" << std::endl;
         return false;
     }
     
@@ -273,18 +315,24 @@ bool WireGuardTunnelManager::startTunnel(const std::string& config) {
         return false;
     }
     
+    // Install Windows Service
+    if (!installService()) {
+        cleanupTempFiles();
+        return false;
+    }
+    
+    // Start the service
+    if (!startService()) {
+        deleteService();
+        cleanupTempFiles();
+        return false;
+    }
+    
     // Reset flags
-    shouldStopTunnel = false;
     isConnecting = true;
     connectionStartTime = std::chrono::system_clock::now();
     
     updateStatus("connecting");
-    
-    // Start tunnel service in a separate thread
-    tunnelThread = std::thread(&WireGuardTunnelManager::runTunnelService, this);
-    
-    // Give it a moment to start
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
     
     // Start monitoring thread
     shouldMonitor = true;
@@ -297,8 +345,7 @@ bool WireGuardTunnelManager::startTunnel(const std::string& config) {
 void WireGuardTunnelManager::stopTunnel() {
     std::cout << "WireGuardTunnelManager: Stopping tunnel..." << std::endl;
     
-    // Signal tunnel to stop
-    shouldStopTunnel = true;
+    // Signal monitor to stop
     shouldMonitor = false;
     
     // Wait for monitoring thread
@@ -306,31 +353,12 @@ void WireGuardTunnelManager::stopTunnel() {
         statusMonitorThread.join();
     }
     
-    // The tunnel service is blocking, so we need to force it to stop
-    // Unfortunately, the WireGuardTunnelService function doesn't provide
-    // a clean way to stop it from another thread.
-    // We'll need to wait for it or terminate ungracefully
-    
-    if (tunnelThread.joinable()) {
-        // Give it a few seconds to stop gracefully
-        auto stopWaitStart = std::chrono::steady_clock::now();
-        while (tunnelRunning && 
-               std::chrono::steady_clock::now() - stopWaitStart < std::chrono::seconds(5)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-        
-        if (tunnelRunning) {
-            std::cerr << "Tunnel thread did not stop gracefully, detaching..." << std::endl;
-            // We can't force-kill the Go runtime safely, so we'll detach
-            tunnelThread.detach();
-        } else {
-            tunnelThread.join();
-        }
-    }
+    // Stop and delete the service
+    stopService();
+    deleteService();
     
     isConnected = false;
     isConnecting = false;
-    tunnelRunning = false;
     
     std::lock_guard<std::mutex> lock(statusMutex);
     updateStatus("disconnected");
