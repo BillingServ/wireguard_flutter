@@ -312,7 +312,8 @@ std::map<std::string, uint64_t> WireGuardTunnelManager::getWireGuardInterfaceSta
                     stats["byte_in"] = currentBytesIn;
                     stats["byte_out"] = currentBytesOut;
                     
-                    // Calculate speeds with exponential moving average smoothing
+                    // Calculate instantaneous speeds (raw, no smoothing)
+                    // Smoothing will be handled in Dart layer for flexibility
                     auto now = std::chrono::system_clock::now();
                     
                     // Initialize on first call
@@ -320,8 +321,6 @@ std::map<std::string, uint64_t> WireGuardTunnelManager::getWireGuardInterfaceSta
                         lastBytesIn = currentBytesIn;
                         lastBytesOut = currentBytesOut;
                         lastStatsTime = now;
-                        smoothedSpeedIn = 0.0;
-                        smoothedSpeedOut = 0.0;
                         stats["speed_in_bps"] = 0;
                         stats["speed_out_bps"] = 0;
                     } else {
@@ -335,17 +334,13 @@ std::map<std::string, uint64_t> WireGuardTunnelManager::getWireGuardInterfaceSta
                             uint64_t byteInDiff = (currentBytesIn > lastBytesIn) ? (currentBytesIn - lastBytesIn) : 0;
                             uint64_t byteOutDiff = (currentBytesOut > lastBytesOut) ? (currentBytesOut - lastBytesOut) : 0;
                             
-                            // Calculate raw speeds (bytes per second)
+                            // Calculate RAW instantaneous speeds (bytes per second)
+                            // No smoothing here - Dart will handle that
                             double rawSpeedIn = byteInDiff / timeDiffSeconds;
                             double rawSpeedOut = byteOutDiff / timeDiffSeconds;
                             
-                            // Smooth the speeds with exponential moving average to reduce jitter
-                            // Weight: 70% new value, 30% old value for responsive but stable speeds
-                            smoothedSpeedIn = (smoothedSpeedIn * 0.3) + (rawSpeedIn * 0.7);
-                            smoothedSpeedOut = (smoothedSpeedOut * 0.3) + (rawSpeedOut * 0.7);
-                            
-                            stats["speed_in_bps"] = static_cast<uint64_t>(smoothedSpeedIn);
-                            stats["speed_out_bps"] = static_cast<uint64_t>(smoothedSpeedOut);
+                            stats["speed_in_bps"] = static_cast<uint64_t>(rawSpeedIn);
+                            stats["speed_out_bps"] = static_cast<uint64_t>(rawSpeedOut);
                             
                             // Update tracking variables
                             lastBytesIn = currentBytesIn;
@@ -367,12 +362,10 @@ std::map<std::string, uint64_t> WireGuardTunnelManager::getWireGuardInterfaceSta
 
 std::map<std::string, uint64_t> WireGuardTunnelManager::getStatistics() {
     if (!isConnected) {
-        // Reset smoothing on disconnect
+        // Reset tracking on disconnect
         lastBytesIn = 0;
         lastBytesOut = 0;
         lastStatsTime = std::chrono::system_clock::time_point{};
-        smoothedSpeedIn = 0.0;
-        smoothedSpeedOut = 0.0;
         return {{"byte_in", 0}, {"byte_out", 0}, {"speed_in_bps", 0}, {"speed_out_bps", 0}};
     }
     
@@ -451,8 +444,6 @@ bool WireGuardTunnelManager::startTunnel(const std::string& config) {
     lastBytesIn = 0;
     lastBytesOut = 0;
     lastStatsTime = std::chrono::system_clock::time_point{};
-    smoothedSpeedIn = 0.0;
-    smoothedSpeedOut = 0.0;
     
     updateStatus("connecting");
     
