@@ -1,3 +1,7 @@
+## 0.1.3
+
+* Recreate too old services on Windows
+
 ## 0.1.0
 
 * Fixed android connection state.

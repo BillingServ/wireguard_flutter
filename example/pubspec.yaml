@@ -1,5 +1,5 @@
-name: wireguard_dart_example
-description: Demonstrates how to use the wireguard_dart plugin.
+name: wireguard_flutter_example
+description: Demonstrates how to use the wireguard_flutter plugin.
 
 environment:
   sdk: '^3.0.0'
