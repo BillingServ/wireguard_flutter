@@ -204,6 +204,24 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         scope.launch(Dispatchers.IO) {
             try {
                 if (futureBackend.await().runningTunnelNames.isEmpty()) {
+                    // Backend doesn't know about any tunnels - this happens after app restart
+                    // Check if VPN is actually still running via system API
+                    if (isVpnActive()) {
+                        Log.i(TAG, "Disconnect - Backend has no tunnels but VPN is active, forcing stop")
+                        updateStage("disconnecting")
+                        
+                        // Force stop the VPN service directly
+                        val stopped = forceStopVpnService()
+                        if (stopped) {
+                            Log.i(TAG, "Disconnect - Force stop VPN service succeeded")
+                            updateStage("disconnected")
+                            flutterSuccess(result, "")
+                            return@launch
+                        } else {
+                            Log.e(TAG, "Disconnect - Force stop VPN service failed")
+                        }
+                    }
+                    
                     updateStage("disconnected")
                     throw Exception("Tunnel is not running")
                 }
@@ -225,6 +243,55 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 Log.e(TAG, "Disconnect - Can't disconnect from tunnel: ${e.message}")
                 flutterError(result, e.message.toString())
             }
+        }
+    }
+    
+    /**
+     * Force stop the VPN service when the backend doesn't know about running tunnels.
+     * This handles the case where the app was restarted while VPN was connected.
+     */
+    private fun forceStopVpnService(): Boolean {
+        try {
+            // Method 1: Try to stop the GoBackend VpnService directly
+            val intent = Intent(context, GoBackend.VpnService::class.java)
+            val stopped = context.stopService(intent)
+            Log.i(TAG, "forceStopVpnService - stopService result: $stopped")
+            
+            // Method 2: Access the static vpnService field and call stopSelf()
+            try {
+                val goBackendClass = Class.forName("com.wireguard.android.backend.GoBackend")
+                val vpnServiceField = goBackendClass.getDeclaredField("vpnService")
+                vpnServiceField.isAccessible = true
+                val vpnServiceFuture = vpnServiceField.get(null)
+                
+                if (vpnServiceFuture != null) {
+                    val isDoneMethod = vpnServiceFuture.javaClass.getMethod("isDone")
+                    val isDone = isDoneMethod.invoke(vpnServiceFuture) as Boolean
+                    
+                    if (isDone) {
+                        val timeUnitClass = Class.forName("java.util.concurrent.TimeUnit")
+                        val nanosecondsField = timeUnitClass.getField("NANOSECONDS")
+                        val nanoseconds = nanosecondsField.get(null)
+                        
+                        val getMethod = vpnServiceFuture.javaClass.getMethod("get", Long::class.javaPrimitiveType, timeUnitClass)
+                        val vpnServiceInstance = getMethod.invoke(vpnServiceFuture, 0L, nanoseconds)
+                        
+                        if (vpnServiceInstance != null) {
+                            val stopSelfMethod = vpnServiceInstance.javaClass.getMethod("stopSelf")
+                            stopSelfMethod.invoke(vpnServiceInstance)
+                            Log.i(TAG, "forceStopVpnService - Called stopSelf() on VpnService")
+                            return true
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "forceStopVpnService - Reflection failed: ${e.message}")
+            }
+            
+            return stopped
+        } catch (e: Exception) {
+            Log.e(TAG, "forceStopVpnService - ERROR: ${e.message}")
+            return false
         }
     }
 
