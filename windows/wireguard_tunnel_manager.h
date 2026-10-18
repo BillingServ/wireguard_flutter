@@ -54,7 +54,7 @@ public:
     
     void setEventSink(flutter::EventSink<flutter::EncodableValue>* sink);
     bool startTunnel(const std::string& config);
-    void stopTunnel();
+    bool stopTunnel();
     std::string getStatus();
     std::map<std::string, uint64_t> getStatistics();
     
@@ -72,6 +72,7 @@ private:
     bool createConfigFile(const std::string& config);
     void cleanupTempFiles();
     bool checkConnectionStatus();
+    bool isServiceRunning();
     std::wstring getAppDirectory();
     std::wstring getAppExecutablePath();
     std::map<std::string, uint64_t> getWireGuardInterfaceStatistics();

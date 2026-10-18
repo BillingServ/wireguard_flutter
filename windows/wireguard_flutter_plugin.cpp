@@ -21,6 +21,18 @@ using namespace std;
 
 namespace wireguard_flutter
 {
+  namespace {
+    // These timers and callbacks all belong to the Flutter platform thread.
+    std::map<UINT_PTR, WireGuardTunnelManager*> status_update_managers;
+
+    void CALLBACK DrainStatusUpdates(HWND, UINT, UINT_PTR timer_id, DWORD) {
+      auto it = status_update_managers.find(timer_id);
+      if (it != status_update_managers.end()) {
+        it->second->processPendingStatusUpdates();
+      }
+    }
+  }
+
 
   // static
   void WireguardFlutterPlugin::RegisterWithRegistrar(PluginRegistrarWindows *registrar)
@@ -60,11 +72,15 @@ namespace wireguard_flutter
     cout << "WireguardFlutterPlugin: Created with embedded tunnel manager" << endl;
   }
 
-  WireguardFlutterPlugin::~WireguardFlutterPlugin() {}
+  WireguardFlutterPlugin::~WireguardFlutterPlugin() {
+    StopStatusTimer();
+    if (tunnel_manager_) tunnel_manager_->setEventSink(nullptr);
+  }
 
   void WireguardFlutterPlugin::HandleMethodCall(const MethodCall<EncodableValue> &call,
                                                 unique_ptr<MethodResult<EncodableValue>> result)
   {
+    if (tunnel_manager_) tunnel_manager_->processPendingStatusUpdates();
     const auto *args = get_if<EncodableMap>(call.arguments());
 
     if (call.method_name() == "initialize")
@@ -124,8 +140,11 @@ namespace wireguard_flutter
       
       try
       {
-        tunnel_manager_->stopTunnel();
-        result->Success();
+        if (tunnel_manager_->stopTunnel()) {
+          result->Success();
+        } else {
+          result->Error("stop_unverified", "SCM has not confirmed the tunnel stopped");
+        }
       }
       catch (exception &e)
       {
@@ -142,7 +161,11 @@ namespace wireguard_flutter
       }
 
       string status = tunnel_manager_->getStatus();
-      result->Success(status);
+      if (status == "unknown") {
+        result->Error("stop_unverified", "SCM has not confirmed the tunnel stopped");
+      } else {
+        result->Success(status);
+      }
       return;
     }
     else if (call.method_name() == "getWireGuardStatistics")
@@ -179,10 +202,21 @@ namespace wireguard_flutter
       const EncodableValue *arguments,
       unique_ptr<EventSink<EncodableValue>> &&events)
   {
+    StopStatusTimer();
     events_ = move(events);
     if (tunnel_manager_ != nullptr)
     {
       tunnel_manager_->setEventSink(events_.get());
+      const auto status = tunnel_manager_->getStatus();
+      if (status == "unknown") {
+        events_->Error("stop_unverified", "SCM has not confirmed the tunnel stopped");
+      } else {
+        events_->Success(EncodableValue(status));
+      }
+      status_update_timer_ = SetTimer(nullptr, 0, 100, DrainStatusUpdates);
+      if (status_update_timer_ != 0) {
+        status_update_managers[status_update_timer_] = tunnel_manager_.get();
+      }
     }
     return nullptr;
   }
@@ -190,12 +224,21 @@ namespace wireguard_flutter
   unique_ptr<StreamHandlerError<EncodableValue>> WireguardFlutterPlugin::OnCancel(
       const EncodableValue *arguments)
   {
-    events_ = nullptr;
+    StopStatusTimer();
     if (tunnel_manager_ != nullptr)
     {
       tunnel_manager_->setEventSink(nullptr);
     }
+    events_ = nullptr;
     return nullptr;
+  }
+
+  void WireguardFlutterPlugin::StopStatusTimer() {
+    if (status_update_timer_ != 0) {
+      KillTimer(nullptr, status_update_timer_);
+      status_update_managers.erase(status_update_timer_);
+      status_update_timer_ = 0;
+    }
   }
 
 } // namespace wireguard_flutter

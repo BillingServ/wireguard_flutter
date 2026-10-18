@@ -34,6 +34,8 @@ namespace wireguard_flutter
     void HandleMethodCall(const flutter::MethodCall<flutter::EncodableValue> &method_call,
                           std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
 
+    UINT_PTR status_update_timer_ = 0;
+    void StopStatusTimer();
     std::unique_ptr<WireGuardTunnelManager> tunnel_manager_;
     std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> events_;
 
