@@ -35,11 +35,15 @@ class WireGuardFlutterMethodChannel extends WireGuardFlutterInterface {
     required String serverAddress,
     required String wgQuickConfig,
     required String providerBundleIdentifier,
+    bool onDemand = false,
+    bool includeAllNetworks = false,
   }) async {
     return _methodChannel.invokeMethod("start", {
       "serverAddress": serverAddress,
       "wgQuickConfig": wgQuickConfig,
       "providerBundleIdentifier": providerBundleIdentifier,
+      "onDemand": onDemand,
+      "includeAllNetworks": includeAllNetworks,
     });
   }
 
